@@ -5,51 +5,123 @@ import os
 import requests
 import re
 
+import logging
+logging.basicConfig(level=logging.WARNING, format='%(message)s',)
+
 ########## CONFIG ##################
 
-TIMEOUT = 2
+TIMEOUT = 20
+MAX_REQUESTS_TIMES = 3
 AJAX_HOST = 'http://h.acfun.tv/homepage/ref'
 
 ####################################
 
 
-def mkandcd_dir(parentpath, name):
+def mk_dir(parentpath, name):
     path = os.path.join(parentpath, name)
     try:
         os.mkdir(path)
     except FileExistsError:
-        os.chdir(path)
+        pass
+    return path
 
-BASEDATA_DIR = os.path.join(os.getcwd(), 'data')
-mkandcd_dir(os.getcwd(), 'data')
+def set_path(model, imgpath, thumbpath):
+    model.imgpath = imgpath
+    model.thumbpath = thumbpath
+
+def download(url,filepath):
+
+    def write_file(contents):
+        with open(filepath,'wb') as f:
+            f.write(contents)
+
+    trytimes = 0
+    print('downloading and save to ', filepath)
+    while trytimes < MAX_REQUESTS_TIMES:
+        try:
+            content = requests.get(url, timeout=TIMEOUT).content
+        except requests.exceptions.Timeout:
+            trytimes += 1
+        else:
+            write_file(content)
+
+            break
+
+BASEDATA_DIR = mk_dir(os.getcwd(), 'data')
 patttern = re.compile(r'>>No\.(\d+)')
 
 
 class Board:
+
+    imgpath = 'img'
+    thumbpath = 'thumb'
+
     def __init__(self, table):
         self.table = table
+        self.support = False
+        self.check_support()
+
+    def check_support(self):
+        try:
+            self.table + 'test_support'
+        except TypeError:
+            self.support = True
+
 
     def reply2table(self):
-        try:
-            self.table + 'test'
-        except TypeError:
 
-            self.blockquote = self.table.find('blockquote')
-            reply_number = self.find_reply()
-            if reply_number:
-                ajaxtable = self.get_replytable(reply_number)
-                self.blockquote.insert(0, ajaxtable)
-
+        if not self.support:
             return self.table
 
-        else:
-            return self.table
+        self.blockquote = self.table.find('blockquote')
+        reply_number = self.find_reply()
+        if reply_number:
+            ajaxtable = self.get_replytable(reply_number)
+            self.blockquote.insert(0, ajaxtable)
+
+        return self.table
+
+
 
     def get_replytable(self, reply_number):
-        url = AJAX_HOST + '?id=' + reply_number
-        return HtmlCLip(url).beautifulsoup_contents()[0]
+        self.url = AJAX_HOST + '?id=' + reply_number
+        return HtmlCLip(self.url).beautifulsoup_contents()[0]
+
+    def dealwith_img(self):
+        """
+        tag_img  -->  thumb
+        tag_a    -->  img
+
+        """
+        if not self.support:
+            return
+
+        def reset_link():
+            self.tag_a['href'] = os.path.join('img', os.path.basename(self.imgfile_path))
+            self.tag_img['src'] = os.path.join('thumb', os.path.basename(self.thumbfile_path))
+
+
+        self.tag_img = self.table.find('img')
+
+        #logging.debug(str(self.tag_img),str(type(self.tag_img)))
+        if self.tag_img:
+            self.tag_a = self.tag_img.parent
+            self._new_linkpath()
+
+
+            download(self.tag_img.get('src'), self.thumbfile_path)
+            download(self.tag_a.get('href'), self.imgfile_path)
+            reset_link()
+
+    def _new_linkpath(self):
+        def _get_imgname(s):
+            return s.split('/')[-1]
+
+        self.imgfile_path = os.path.join(self.imgpath, _get_imgname(self.tag_a.get('href')))
+        self.thumbfile_path = os.path.join(self.thumbpath, _get_imgname(self.tag_img.get('src')))
 
     def result(self):
+        self.dealwith_img()
         self.reply2table()
         return self.table
 
@@ -59,7 +131,7 @@ class Board:
             return group.groups()[0]
         else:
             return None
-    #def result(self):
+
 
 
 class HtmlCLip:
@@ -82,7 +154,7 @@ class HtmlCLip:
         return parsed
 
     def find_board(self):
-        self.board = self.content.find_all('table', {'id':True, 'border':'0'})
+        self.board = self.content.find_all('table', {'id': True, 'border': '0'})
 
         if self.firstpage:
             temp = []
@@ -122,16 +194,22 @@ class MainThreads:
         self.page = 1
         self.url = self.clean_url(url)
         self.threads = self.get_threads()
-        self.filepath = os.path.join(BASEDATA_DIR, self.threads, self.threads + '.html')
+        self.init_path()
+        set_path(Board, imgpath=self.imgpath, thumbpath=self.thumbpath)
+        self.filepath = os.path.join(self.workpath, self.threads + '.html')
 
     #context manager
     def __enter__(self):
-        mkandcd_dir(BASEDATA_DIR, self.threads)
         with open(self.filepath, 'w', encoding='utf8')as f:
             f.write('<div>')
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.write_html('</div>')
+
+    def init_path(self):
+        self.workpath = mk_dir(BASEDATA_DIR, self.threads)
+        self.imgpath = mk_dir(self.workpath, 'img')
+        self.thumbpath = mk_dir(self.workpath, 'thumb')
 
     def travelandwrite_html(self):
 
@@ -166,10 +244,11 @@ class MainThreads:
         return str(self.url.split('/')[-1])
 
     def print_info(self):
-        print('dealing with page',self.page)
+        print('dealing with page', self.page)
+
 
 def main():
-    url = input(r'please input the url start with http://! ')
+    url = input('please input the url start with http://! \n')
     mainthreads = MainThreads(url)
     with mainthreads:
         mainthreads.travelandwrite_html()
