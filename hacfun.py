@@ -74,9 +74,11 @@ class Board:
             return self.table
 
         self.blockquote = self.table.find('blockquote')
+        logging.debug(str(self.blockquote))
         reply_number = self.find_reply()
         if reply_number:
             ajaxtable = self.get_replytable(reply_number)
+            ajaxtable['border'] = '1'
             self.blockquote.insert(0, ajaxtable)
 
         return self.table
@@ -84,7 +86,8 @@ class Board:
 
 
     def get_replytable(self, reply_number):
-        self.url = AJAX_HOST + '?id=' + reply_number
+        self.url = AJAX_HOST + '?tid=' + reply_number
+        logging.debug(self.url)
         return HtmlCLip(self.url).beautifulsoup_contents()[0]
 
     def dealwith_img(self):
@@ -126,7 +129,9 @@ class Board:
         return self.table
 
     def find_reply(self):
-        group = patttern.search(str(self.blockquote))
+        if not self.blockquote:
+            return None
+        group = patttern.search(self.blockquote.text)
         if group:
             return group.groups()[0]
         else:
