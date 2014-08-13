@@ -4,15 +4,17 @@ from bs4 import BeautifulSoup as bs
 import os
 import requests
 import re
+import threading
 
 import logging
-logging.basicConfig(level=logging.WARNING, format='%(message)s',)
+logging.basicConfig(level=logging.DEBUG, format='(%(threadName)-2s) %(message)s',)
 
 ########## CONFIG ##################
 
 TIMEOUT = 20
 MAX_REQUESTS_TIMES = 3
-AJAX_HOST = 'http://h.acfun.tv/homepage/ref'
+AJAX_HOST = 'http://h.acfun.tv/homepage/ref?tid='
+MAX_THREADS = 3
 
 ####################################
 
@@ -36,12 +38,14 @@ def download(url,filepath):
             f.write(contents)
 
     trytimes = 0
+    logging.debug('download url is %s',url)
     print('downloading and save to ', filepath)
     while trytimes < MAX_REQUESTS_TIMES:
         try:
-            content = requests.get(url, timeout=TIMEOUT).content
+            content = connect.get(url, timeout=TIMEOUT).content
         except requests.exceptions.Timeout:
             trytimes += 1
+            logging.debug('connect failed!')
         else:
             write_file(content)
 
@@ -49,8 +53,13 @@ def download(url,filepath):
 
 BASEDATA_DIR = mk_dir(os.getcwd(), 'data')
 patttern = re.compile(r'>>No\.(\d+)')
-
-
+connect = requests.session()
+"""
+class Connect:
+    _requests = requests.session()
+    def get(self,url):
+        return self._requests.get(url)
+"""
 class Board:
 
     imgpath = 'img'
@@ -74,7 +83,7 @@ class Board:
             return self.table
 
         self.blockquote = self.table.find('blockquote')
-        logging.debug(str(self.blockquote))
+
         reply_number = self.find_reply()
         if reply_number:
             ajaxtable = self.get_replytable(reply_number)
@@ -86,8 +95,8 @@ class Board:
 
 
     def get_replytable(self, reply_number):
-        self.url = AJAX_HOST + '?tid=' + reply_number
-        logging.debug(self.url)
+        self.url = AJAX_HOST + reply_number
+        logging.debug('ajax table url is %s',self.url)
         return HtmlCLip(self.url).beautifulsoup_contents()[0]
 
     def dealwith_img(self):
@@ -111,7 +120,6 @@ class Board:
             self.tag_a = self.tag_img.parent
             self._new_linkpath()
 
-
             download(self.tag_img.get('src'), self.thumbfile_path)
             download(self.tag_a.get('href'), self.imgfile_path)
             reset_link()
@@ -126,7 +134,7 @@ class Board:
     def result(self):
         self.dealwith_img()
         self.reply2table()
-        return self.table
+        #return self.table
 
     def find_reply(self):
         if not self.blockquote:
@@ -138,12 +146,13 @@ class Board:
             return None
 
 
-
 class HtmlCLip:
     """ find table board
     """
+
+    _board_sema = threading.Semaphore(MAX_THREADS)
+
     def __init__(self, url, threadsnumber='0', firstpage=False):
-        #self.content = self.bsresponse(url)
         self.url = url
         self.firstpage = firstpage
         self.threadsnumber = threadsnumber
@@ -152,13 +161,37 @@ class HtmlCLip:
     def board_parse(self):
 
         self.find_board()
-        parsed = []
+        self.thread_list = []
         for i in self.board:
-            parsed.append(Board(i).result())
-        self.parsed_board = parsed
-        return parsed
+            #parsed.append(Board(i).result())
+            t = threading.Thread(target=self.mutilthread,args=(HtmlCLip._board_sema, i ))
+            t.start()
+            self.thread_list.append(t)
+
+
+        self.set_all_join()
+
+        # self.board is a 'list' and  it's elements are changed,finally,it is parsed.
+        self.parsed_board = self.board
+        return self.parsed_board
+
+    def mutilthread(self, sema, table):
+        with sema:
+            board = Board(table)
+            board.result()
+
+    def set_all_join(self):
+        """
+        so that the interpreter wait all threads finish.
+        """
+        for t in self.thread_list:
+            t.join()
+
 
     def find_board(self):
+        """
+        :return:  a list of table element
+        """
         self.board = self.content.find_all('table', {'id': True, 'border': '0'})
 
         if self.firstpage:
@@ -172,14 +205,19 @@ class HtmlCLip:
         return self.board
 
     def bsresponse(self, url):
-        req = requests.get(url)
+        req = connect.get(url)
         return bs(req.content)
 
     def get_maincontent(self):
         return self.content.find('div', class_='threads_' + self.threadsnumber)
 
     def beautifulsoup_contents(self):
-        return self.board_parse()
+        #do not use board_parse because of  mutilthread block
+        self.find_board()
+        for table in self.board:
+            Board(table).result()
+        #board is a list and the element is changed,so all i do is return the list
+        return self.board
 
     def str_contents(self):
         self.board_parse()
@@ -199,6 +237,7 @@ class MainThreads:
         self.page = 1
         self.url = self.clean_url(url)
         self.threads = self.get_threads()
+        self.name = self.user_set_foldername()
         self.init_path()
         set_path(Board, imgpath=self.imgpath, thumbpath=self.thumbpath)
         self.filepath = os.path.join(self.workpath, self.threads + '.html')
@@ -212,7 +251,7 @@ class MainThreads:
         self.write_html('</div>')
 
     def init_path(self):
-        self.workpath = mk_dir(BASEDATA_DIR, self.threads)
+        self.workpath = mk_dir(BASEDATA_DIR, self.name)
         self.imgpath = mk_dir(self.workpath, 'img')
         self.thumbpath = mk_dir(self.workpath, 'thumb')
 
@@ -251,6 +290,9 @@ class MainThreads:
     def print_info(self):
         print('dealing with page', self.page)
 
+    def user_set_foldername(self):
+        name = input('name?\ndefault name is (%s) press enter to pass' % self.threads)
+        return name if name else self.threads
 
 def main():
     url = input('please input the url start with http://! \n')
