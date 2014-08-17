@@ -37,6 +37,11 @@ def download(url,filepath):
         with open(filepath,'wb') as f:
             f.write(contents)
 
+    if downloaded_image.exigst(url):
+        return
+    else:
+        downloaded_image.add(url)
+
     trytimes = 0
     logging.debug('download url is %s',url)
     print('downloading and save to ', filepath)
@@ -51,15 +56,23 @@ def download(url,filepath):
 
             break
 
-BASEDATA_DIR = mk_dir(os.getcwd(), 'data')
-patttern = re.compile(r'>>No\.(\d+)')
-connect = requests.session()
-"""
-class Connect:
-    _requests = requests.session()
-    def get(self,url):
-        return self._requests.get(url)
-"""
+
+class DownloadedImage:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._set = set()
+
+    def exigst(self, key):
+        with self._lock:
+            if key in self._set:
+                return True
+            else:
+                return False
+
+    def add(self,key):
+        with self._lock:
+            self._set.add(key)
+
 class Board:
 
     imgpath = 'img'
@@ -83,21 +96,24 @@ class Board:
             return self.table
 
         self.blockquote = self.table.find('blockquote')
-
         reply_number = self.find_reply()
         if reply_number:
             ajaxtable = self.get_replytable(reply_number)
-            ajaxtable['border'] = '1'
+            if ajaxtable:
+                ajaxtable['border'] = '1'
+            else:
+                return
             self.blockquote.insert(0, ajaxtable)
-
-        return self.table
-
 
 
     def get_replytable(self, reply_number):
         self.url = AJAX_HOST + reply_number
         logging.debug('ajax table url is %s',self.url)
-        return HtmlCLip(self.url).beautifulsoup_contents()[0]
+        table_list = HtmlCLip(self.url).beautifulsoup_contents()
+        if table_list:
+            return table_list[0]
+        else:
+            return None
 
     def dealwith_img(self):
         """
@@ -114,8 +130,6 @@ class Board:
 
 
         self.tag_img = self.table.find('img')
-
-        #logging.debug(str(self.tag_img),str(type(self.tag_img)))
         if self.tag_img:
             self.tag_a = self.tag_img.parent
             self._new_linkpath()
@@ -134,7 +148,7 @@ class Board:
     def result(self):
         self.dealwith_img()
         self.reply2table()
-        #return self.table
+
 
     def find_reply(self):
         if not self.blockquote:
@@ -293,6 +307,17 @@ class MainThreads:
     def user_set_foldername(self):
         name = input('name?\ndefault name is (%s) press enter to pass' % self.threads)
         return name if name else self.threads
+
+
+
+#####################################################3
+
+BASEDATA_DIR = mk_dir(os.getcwd(), 'data')
+patttern = re.compile(r'>>No\.(\d+)')
+connect = requests.session()
+downloaded_image = DownloadedImage()
+
+
 
 def main():
     url = input('please input the url start with http://! \n')
