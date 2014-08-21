@@ -5,9 +5,9 @@ import os
 import requests
 import re
 import threading
-
+import weakref
 import logging
-logging.basicConfig(level=logging.DEBUG, format='(%(threadName)-2s) %(message)s',)
+logging.basicConfig(level=logging.WARNING, format='(%(threadName)-2s) %(message)s',)
 
 ########## CONFIG ##################
 
@@ -27,23 +27,26 @@ def mk_dir(parentpath, name):
         pass
     return path
 
+
 def set_path(model, imgpath, thumbpath):
     model.imgpath = imgpath
     model.thumbpath = thumbpath
 
-def download(url,filepath):
+
+def download(url, filepath):
 
     def write_file(contents):
-        with open(filepath,'wb') as f:
+        with open(filepath, 'wb') as f:
             f.write(contents)
 
     if downloaded_image.exigst(url):
+        print('Already downloaded: ',url)
         return
     else:
         downloaded_image.add(url)
 
     trytimes = 0
-    logging.debug('download url is %s',url)
+    logging.debug('download url is %s', url)
     print('downloading and save to ', filepath)
     while trytimes < MAX_REQUESTS_TIMES:
         try:
@@ -69,9 +72,10 @@ class DownloadedImage:
             else:
                 return False
 
-    def add(self,key):
+    def add(self, key):
         with self._lock:
             self._set.add(key)
+
 
 class Board:
 
@@ -89,7 +93,6 @@ class Board:
         except TypeError:
             self.support = True
 
-
     def reply2table(self):
 
         if not self.support:
@@ -105,15 +108,10 @@ class Board:
                 return
             self.blockquote.insert(0, ajaxtable)
 
-
     def get_replytable(self, reply_number):
         self.url = AJAX_HOST + reply_number
-        logging.debug('ajax table url is %s',self.url)
-        table_list = HtmlCLip(self.url).beautifulsoup_contents()
-        if table_list:
-            return table_list[0]
-        else:
-            return None
+        ajaxtable = AjaxTable.manager.set_url(self.url)
+        return ajaxtable.get_table()
 
     def dealwith_img(self):
         """
@@ -127,7 +125,6 @@ class Board:
         def reset_link():
             self.tag_a['href'] = os.path.join('img', os.path.basename(self.imgfile_path))
             self.tag_img['src'] = os.path.join('thumb', os.path.basename(self.thumbfile_path))
-
 
         self.tag_img = self.table.find('img')
         if self.tag_img:
@@ -148,7 +145,7 @@ class Board:
     def result(self):
         self.dealwith_img()
         self.reply2table()
-
+        return self.table
 
     def find_reply(self):
         if not self.blockquote:
@@ -178,10 +175,9 @@ class HtmlCLip:
         self.thread_list = []
         for i in self.board:
             #parsed.append(Board(i).result())
-            t = threading.Thread(target=self.mutilthread,args=(HtmlCLip._board_sema, i ))
+            t = threading.Thread(target=self.mutilthread, args=(HtmlCLip._board_sema, i))
             t.start()
             self.thread_list.append(t)
-
 
         self.set_all_join()
 
@@ -200,7 +196,6 @@ class HtmlCLip:
         """
         for t in self.thread_list:
             t.join()
-
 
     def find_board(self):
         """
@@ -226,6 +221,8 @@ class HtmlCLip:
         return self.content.find('div', class_='threads_' + self.threadsnumber)
 
     def beautifulsoup_contents(self):
+        """this method is deprecated"""
+
         #do not use board_parse because of  mutilthread block
         self.find_board()
         for table in self.board:
@@ -242,6 +239,38 @@ class HtmlCLip:
             return True
         else:
             return False
+
+
+class AjaxTableManager:
+    def __init__(self):
+        self._cache = weakref.WeakValueDictionary()
+        self._lock = threading.Lock()
+
+    def set_url(self, url):
+        with self._lock:
+            if url not in self._cache:
+                ajaxtable = AjaxTable(url)
+                self._cache[url] = ajaxtable
+            else:
+                ajaxtable = self._cache[url]
+        return ajaxtable
+
+
+class AjaxTable(HtmlCLip):
+    manager = AjaxTableManager()
+
+    def __init__(self, url):
+        super().__init__(url)
+        self.table = ''
+        self.active = True
+
+    def get_table(self):
+        if self.active:
+            board = self.find_board()
+            if board:
+                self.table = Board(board[0]).result()
+            self.active = False
+        return self.table
 
 
 class MainThreads:
@@ -309,14 +338,12 @@ class MainThreads:
         return name if name else self.threads
 
 
-
 #####################################################3
 
 BASEDATA_DIR = mk_dir(os.getcwd(), 'data')
 patttern = re.compile(r'>>No\.(\d+)')
 connect = requests.session()
 downloaded_image = DownloadedImage()
-
 
 
 def main():
