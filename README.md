@@ -25,7 +25,7 @@ required
 --------
 - python3
 - requests
-- bs4
+- beautifulsoup4 >= 4.3.2
 
 to do
 ------
