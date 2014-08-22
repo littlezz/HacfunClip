@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.WARNING, format='(%(threadName)-2s) %(message)
 TIMEOUT = 20
 MAX_REQUESTS_TIMES = 3
 AJAX_HOST = 'http://h.acfun.tv/homepage/ref?tid='
+ACFUN_HOST = 'http://h.acfun.tv'
 MAX_THREADS = 3
 
 ####################################
@@ -46,7 +47,6 @@ def download(url, filepath):
         downloaded_image.add(url)
 
     trytimes = 0
-    logging.debug('download url is %s', url)
     print('downloading and save to ', filepath)
     while trytimes < MAX_REQUESTS_TIMES:
         try:
@@ -143,9 +143,18 @@ class Board:
         self.thumbfile_path = os.path.join(self.thumbpath, _get_imgname(self.tag_img.get('src')))
 
     def result(self):
-        self.dealwith_img()
-        self.reply2table()
+        if self.support:
+            self.complete_id_link()
+            self.dealwith_img()
+            self.reply2table()
+
         return self.table
+
+    def complete_id_link(self):
+        id_link = self.table.find('a', class_='r')
+        if id_link:
+            id_link['href'] = ACFUN_HOST + id_link['href']
+            id_link['target'] = '_blank'
 
     def find_reply(self):
         if not self.blockquote:
@@ -174,7 +183,6 @@ class HtmlCLip:
         self.find_board()
         self.thread_list = []
         for i in self.board:
-            #parsed.append(Board(i).result())
             t = threading.Thread(target=self.mutilthread, args=(HtmlCLip._board_sema, i))
             t.start()
             self.thread_list.append(t)
@@ -252,6 +260,7 @@ class AjaxTableManager:
                 ajaxtable = AjaxTable(url)
                 self._cache[url] = ajaxtable
             else:
+                logging.debug('cache! %s',url)
                 ajaxtable = self._cache[url]
         return ajaxtable
 
@@ -263,13 +272,15 @@ class AjaxTable(HtmlCLip):
         super().__init__(url)
         self.table = ''
         self.active = True
+        self._lock = threading.Lock()
 
     def get_table(self):
-        if self.active:
-            board = self.find_board()
-            if board:
-                self.table = Board(board[0]).result()
-            self.active = False
+        with self._lock:
+            if self.active:
+                board = self.find_board()
+                if board:
+                    self.table = Board(board[0]).result()
+                self.active = False
         return self.table
 
 
