@@ -15,7 +15,7 @@ TIMEOUT = 20
 MAX_REQUESTS_TIMES = 3
 AJAX_HOST = 'http://h.acfun.tv/homepage/ref?tid='
 ACFUN_HOST = 'http://h.acfun.tv'
-MAX_THREADS = 3
+MAX_THREADS = 4
 
 ####################################
 
@@ -56,7 +56,6 @@ def download(url, filepath):
             logging.debug('connect failed!')
         else:
             write_file(content)
-
             break
 
 
@@ -106,6 +105,7 @@ class Board:
                 ajaxtable['border'] = '1'
             else:
                 return
+
             self.blockquote.insert(0, ajaxtable)
 
     def get_replytable(self, reply_number):
@@ -167,7 +167,7 @@ class Board:
 
 
 class HtmlCLip:
-    """ find table board
+    """ for a single html
     """
 
     _board_sema = threading.Semaphore(MAX_THREADS)
@@ -227,16 +227,6 @@ class HtmlCLip:
 
     def get_maincontent(self):
         return self.content.find('div', class_='threads_' + self.threadsnumber)
-
-    def beautifulsoup_contents(self):
-        """this method is deprecated"""
-
-        #do not use board_parse because of  mutilthread block
-        self.find_board()
-        for table in self.board:
-            Board(table).result()
-        #board is a list and the element is changed,so all i do is return the list
-        return self.board
 
     def str_contents(self):
         self.board_parse()
@@ -345,7 +335,7 @@ class MainThreads:
         print('dealing with page', self.page)
 
     def user_set_foldername(self):
-        name = input('name?\ndefault name is (%s) press enter to pass' % self.threads)
+        name = input('name?\ndefault name is (%s) press Enter to pass\n' % self.threads)
         return name if name else self.threads
 
 
