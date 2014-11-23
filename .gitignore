@@ -1,6 +1,6 @@
-data/
 *.~
 *.html
 *.py[cd]
 .idea/
 TODO.md
+data*/

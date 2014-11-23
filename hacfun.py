@@ -1,10 +1,11 @@
-from urllib import parse
+from urllib import parse as urllib_parse
 from bs4 import BeautifulSoup
 
 
 import os
 from zzlib.decorators import retry_connect, prepare_dir
 from requests import get as _get
+from zzlib.utils import SafeString
 
 __author__ = 'zz'
 
@@ -24,6 +25,11 @@ def requests_get(url, **kwargs):
 
 def get_beautifulsoup_content(url):
     return BeautifulSoup(requests_get(url).content)
+
+
+@prepare_dir(DATA_DIRNAME)
+def mkdir_with_dirname(dirname):
+    os.mkdir(os.path.join(DATA_DIRNAME, dirname))
 
 
 
@@ -59,7 +65,6 @@ class Page:
     def is_endpage(self):
         return False if self.bs.find('a', text='下一页') else True
 
-
     def complete_page_output(self):
         """
         单独让每一个board.run, 为后续多线程留出空间
@@ -70,32 +75,49 @@ class Page:
             yield board
 
 
-class UrlDescriptor:
+class BaseDescriptor:
     def __init__(self, name):
         self.name = name
 
-    def __get__(self, obj, owner):
-        return obj.__dict__[self.name]
+    def __get__(self, instance, owner):
+        return instance.__dict__[self.name]
 
-    def __set__(self, obj, value):
-        parsed_url = parse.urlparse(value)
+    def __set__(self, instance, value):
+        instance.__dict__[self.name] = value
+
+
+class UrlDescriptor(BaseDescriptor):
+    def __set__(self, instance, value):
+        parsed_url = urllib_parse.urlparse(value)
         if not (parsed_url.scheme and parsed_url.netloc):
             raise TypeError('unvalid url')
         else:
-            obj.__dict__[self.name] = value
+            super().__set__(instance, value)
+
+
+class DirnameDescriptor(BaseDescriptor):
+    plugings = [mkdir_with_dirname, ]
+    safe_string = SafeString()
+
+    def __set__(self, instance, value):
+        """
+        safe dirname set
+        """
+        value = self.safe_string.sanitized_dirname(value)
+        super().__set__(instance, value)
+
+        for plugin_func in self.plugings:
+            plugin_func(value)
+
 
 class UserInput:
     url = UrlDescriptor('url')
+    dirname = DirnameDescriptor('dirname')
 
-    def __init__(self, url, dirname=None):
-        self.url = url
-        self.dirname = dirname
+    def collect_input(self):
+        self.url = input('输入串的网址\n')
+        self.dirname = input('输入自定义的名字, 直接回车跳过\n')
 
-    # TODO:
-    @staticmethod
-    @prepare_dir(DATA_DIRNAME)
-    def mkdir_with_username():
-        pass
 
 
 
