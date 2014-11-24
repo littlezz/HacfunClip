@@ -6,6 +6,8 @@ import os
 from zzlib.decorators import retry_connect, prepare_dir
 from requests import get as _get
 from zzlib.utils import SafeString
+import logging
+logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
 __author__ = 'zz'
 
@@ -121,4 +123,9 @@ class UserInput:
 
 
 
+def main():
+    user_input = UserInput()
+    user_input.collect_input()
 
+if __name__ == '__main__':
+    main()
