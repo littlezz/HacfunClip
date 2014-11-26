@@ -33,7 +33,10 @@ def mkdir_with_dirname(dirname):
 
 
 
+
+
 class Board:
+
 
     def __init__(self, board_bs: BeautifulSoup):
         self.bs = board_bs
@@ -41,7 +44,11 @@ class Board:
     def __str__(self):
         return str(self.bs)
 
+
     def run(self):
+        pass
+
+    def _plugin_reply_insert(self):
         pass
 
 
