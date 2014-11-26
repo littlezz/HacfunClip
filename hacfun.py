@@ -1,358 +1,189 @@
+from urllib import parse as urllib_parse
+from bs4 import BeautifulSoup
+import os
+from zzlib.decorators import retry_connect, prepare_dir, loop
+from requests import get as _get
+from zzlib.utils import SafeString
+import logging
+logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+
 __author__ = 'zz'
 
-from bs4 import BeautifulSoup as bs
-import os
-import requests
-import re
-import threading
-import weakref
-import logging
-logging.basicConfig(level=logging.WARNING, format='(%(threadName)-2s) %(message)s',)
-
-########## CONFIG ##################
-
-TIMEOUT = 20
-MAX_REQUESTS_TIMES = 3
-AJAX_HOST = 'http://h.acfun.tv/homepage/ref?tid='
-ACFUN_HOST = 'http://h.acfun.tv'
-MAX_THREADS = 4
-
-####################################
+# new version for new A island!
 
 
-def mk_dir(parentpath, name):
-    path = os.path.join(parentpath, name)
-    try:
-        os.mkdir(path)
-    except FileExistsError:
-        pass
-    return path
+########### CONFIG ###############
+DATA_DIRNAME = 'data'
+
+#####################3
 
 
-def set_path(model, imgpath, thumbpath):
-    model.imgpath = imgpath
-    model.thumbpath = thumbpath
+@retry_connect(retry_times=3, timeout=2)
+def requests_get(url, **kwargs):
+    return _get(url, **kwargs)
 
 
-def download(url, filepath):
-
-    def write_file(contents):
-        with open(filepath, 'wb') as f:
-            f.write(contents)
-
-    if downloaded_image.exigst(url):
-        print('Already downloaded: ',url)
-        return
-    else:
-        downloaded_image.add(url)
-
-    trytimes = 0
-    print('downloading and save to ', filepath)
-    while trytimes < MAX_REQUESTS_TIMES:
-        try:
-            content = connect.get(url, timeout=TIMEOUT).content
-        except requests.exceptions.Timeout:
-            trytimes += 1
-            logging.debug('connect failed!')
-        else:
-            write_file(content)
-            break
+def get_beautifulsoup_content(url):
+    return BeautifulSoup(requests_get(url).content)
 
 
-class DownloadedImage:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._set = set()
+@prepare_dir(DATA_DIRNAME)
+def mkdir_with_dirname(dirname):
+    os.mkdir(dirname)
 
-    def exigst(self, key):
-        with self._lock:
-            if key in self._set:
-                return True
-            else:
-                return False
 
-    def add(self, key):
-        with self._lock:
-            self._set.add(key)
+
 
 
 class Board:
 
-    imgpath = 'img'
-    thumbpath = 'thumb'
 
-    def __init__(self, table):
-        self.table = table
-        self.support = False
-        self.check_support()
+    def __init__(self, board_bs: BeautifulSoup):
+        self.bs = board_bs
 
-    def check_support(self):
-        try:
-            self.table + 'test_support'
-        except TypeError:
-            self.support = True
+    def __str__(self):
+        return str(self.bs)
 
-    def reply2table(self):
 
-        if not self.support:
-            return self.table
+    def run(self):
+        pass
 
-        self.blockquote = self.table.find('blockquote')
-        reply_number = self.find_reply()
-        if reply_number:
-            ajaxtable = self.get_replytable(reply_number)
-            if ajaxtable:
-                ajaxtable['border'] = '1'
-            else:
-                return
+    def _plugin_reply_insert(self):
+        pass
 
-            self.blockquote.insert(0, ajaxtable)
 
-    def get_replytable(self, reply_number):
-        self.url = AJAX_HOST + reply_number
-        ajaxtable = AjaxTable.manager.set_url(self.url)
-        return ajaxtable.get_table()
 
-    def dealwith_img(self):
+class Page:
+    def __init__(self, url, pn=1):
+        """bs is BeautifulSoup object
+
+        pn: int
         """
-        tag_img  -->  thumb
-        tag_a    -->  img
+        self._baseurl = url
+        self.bs = None
+        self.pn = pn
 
+    @property
+    def url(self):
+        return self._baseurl + '?page=' + str(self.pn)
+
+    @property
+    def _boards(self):
         """
-        if not self.support:
-            return
+        :return: a list of the instance of Board
+        """
+        self.bs = get_beautifulsoup_content(self.url)
 
-        def reset_link():
-            self.tag_a['href'] = os.path.join('img', os.path.basename(self.imgfile_path))
-            self.tag_img['src'] = os.path.join('thumb', os.path.basename(self.thumbfile_path))
+        if self.pn <= 1:
+            yield Board(self.bs.find('div', class_='h-threads-item-main'))
 
-        self.tag_img = self.table.find('img')
-        if self.tag_img:
-            self.tag_a = self.tag_img.parent
-            self._new_linkpath()
+        for reply in self.bs.find_all('div', class_='h-threads-item-reply'):
+            yield Board(reply)
 
-            download(self.tag_img.get('src'), self.thumbfile_path)
-            download(self.tag_a.get('href'), self.imgfile_path)
-            reset_link()
+    def next(self):
+        self.pn += 1
 
-    def _new_linkpath(self):
-        def _get_imgname(s):
-            return s.split('/')[-1]
+    def is_endpage(self):
+        return False if self.bs.find('a', text='下一页') else True
 
-        self.imgfile_path = os.path.join(self.imgpath, _get_imgname(self.tag_a.get('href')))
-        self.thumbfile_path = os.path.join(self.thumbpath, _get_imgname(self.tag_img.get('src')))
+    @property
+    def finally_boards(self):
+        """
+        单独让每一个board.run, 为后续多线程留出空间
+        """
+        for board in self._boards:
+            board.run()
+            yield board
 
-    def result(self):
-        if self.support:
-            self.complete_id_link()
-            self.dealwith_img()
-            self.reply2table()
 
-        return self.table
+class BaseDescriptor:
+    def __init__(self, name):
+        self.name = name
 
-    def complete_id_link(self):
-        id_link = self.table.find('a', class_='r')
-        if id_link:
-            id_link['href'] = ACFUN_HOST + id_link['href']
-            id_link['target'] = '_blank'
+    def __get__(self, instance, owner):
+        return instance.__dict__[self.name]
 
-    def find_reply(self):
-        if not self.blockquote:
-            return None
-        group = patttern.search(self.blockquote.text)
-        if group:
-            return group.groups()[0]
+    def __set__(self, instance, value):
+        instance.__dict__[self.name] = value
+
+
+class UrlDescriptor(BaseDescriptor):
+    def __set__(self, instance, value):
+        parsed_url = urllib_parse.urlparse(value)
+        if not (parsed_url.scheme and parsed_url.netloc):
+            raise TypeError('unvalid url')
         else:
-            return None
+            # clean url
+            value = value.split('?')[0]
+
+            super().__set__(instance, value)
 
 
-class HtmlCLip:
-    """ for a single html
-    """
+class PathDescriptor(BaseDescriptor):
+    plugings = [mkdir_with_dirname, ]
 
-    _board_sema = threading.Semaphore(MAX_THREADS)
-
-    def __init__(self, url, threadsnumber='0', firstpage=False):
-        self.url = url
-        self.firstpage = firstpage
-        self.threadsnumber = threadsnumber
-        self.content = self.bsresponse(url)
-
-    def board_parse(self):
-
-        self.find_board()
-        self.thread_list = []
-        for i in self.board:
-            t = threading.Thread(target=self.mutilthread, args=(HtmlCLip._board_sema, i))
-            t.start()
-            self.thread_list.append(t)
-
-        self.set_all_join()
-
-        # self.board is a 'list' and  it's elements are changed,finally,it is parsed.
-        self.parsed_board = self.board
-        return self.parsed_board
-
-    def mutilthread(self, sema, table):
-        with sema:
-            board = Board(table)
-            board.result()
-
-    def set_all_join(self):
+    def __set__(self, instance, value):
         """
-        so that the interpreter wait all threads finish.
+        with plugin that mkdir.
         """
-        for t in self.thread_list:
-            t.join()
+        super().__set__(instance, value)
 
-    def find_board(self):
-        """
-        :return:  a list of table element
-        """
-        self.board = self.content.find_all('table', {'id': True, 'border': '0'})
-
-        if self.firstpage:
-            temp = []
-            for i in self.get_maincontent().children:
-                if i in self.board:
-                    break
-                else:
-                    temp.append(i)
-            self.board = temp + self.board
-        return self.board
-
-    def bsresponse(self, url):
-        req = connect.get(url)
-        return bs(req.content)
-
-    def get_maincontent(self):
-        return self.content.find('div', class_='threads_' + self.threadsnumber)
-
-    def str_contents(self):
-        self.board_parse()
-        return [str(item) for item in self.parsed_board]
-
-    def isendpage(self):
-        if not self.content.find('a', text='下一页'):
-            return True
-        else:
-            return False
+        for plugin_func in self.plugings:
+            plugin_func(value)
 
 
-class AjaxTableManager:
+class UserInput:
+    url = UrlDescriptor('url')
+    base_dir = PathDescriptor('base_dir')
+    img_dir = PathDescriptor('img_dir')
+    thumb_dir = PathDescriptor('thumb_dir')
+
     def __init__(self):
-        self._cache = weakref.WeakValueDictionary()
-        self._lock = threading.Lock()
+        self.filepath = ''
 
-    def set_url(self, url):
-        with self._lock:
-            if url not in self._cache:
-                ajaxtable = AjaxTable(url)
-                self._cache[url] = ajaxtable
-            else:
-                logging.debug('cache! %s',url)
-                ajaxtable = self._cache[url]
-        return ajaxtable
+    def collect_input(self):
+        self.url = input('输入串的网址\n')
 
+        default_dirname = self.url.split('/')[-1]
 
-class AjaxTable(HtmlCLip):
-    manager = AjaxTableManager()
+        dirname_ = input("输入自定义的名字(默认为'{}'), 直接回车跳过\n".format(default_dirname))
+        dirname = SafeString().sanitized_dirname(dirname_) if dirname_ else default_dirname
 
-    def __init__(self, url):
-        super().__init__(url)
-        self.table = ''
-        self.active = True
-        self._lock = threading.Lock()
+        self.base_dir = os.path.join(DATA_DIRNAME, dirname)
+        self.filepath = os.path.join(self.base_dir, dirname + '.html')
 
-    def get_table(self):
-        with self._lock:
-            if self.active:
-                board = self.find_board()
-                if board:
-                    self.table = Board(board[0]).result()
-                self.active = False
-        return self.table
+        logging.debug('base_dir: %s', self.base_dir)
+        logging.debug('filepath: %s', self.filepath)
+
+        # setup inner dir
+        self.img_dir = os.path.join(self.base_dir, 'img')
+        self.thumb_dir = os.path.join(self.base_dir, 'thumb')
+
+        logging.debug('img_dir: %s', self.img_dir)
 
 
-class MainThreads:
-    """whole threads"""
 
-    def __init__(self, url):
-        self.page = 1
-        self.url = self.clean_url(url)
-        self.threads = self.get_threads()
-        self.name = self.user_set_foldername()
-        self.init_path()
-        set_path(Board, imgpath=self.imgpath, thumbpath=self.thumbpath)
-        self.filepath = os.path.join(self.workpath, self.threads + '.html')
+@loop
+def page_go(page, file):
+    """
+    名字有点奇葩...我懂...我懂..
+    好吧, 我只是单纯的想用loop 修饰器而已...
+    """
+    for board in page.finally_boards:
+        file.write(str(board))
 
-    #context manager
-    def __enter__(self):
-        with open(self.filepath, 'w', encoding='utf8')as f:
-            f.write('<div>')
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.write_html('</div>')
-
-    def init_path(self):
-        self.workpath = mk_dir(BASEDATA_DIR, self.name)
-        self.imgpath = mk_dir(self.workpath, 'img')
-        self.thumbpath = mk_dir(self.workpath, 'thumb')
-
-    def travelandwrite_html(self):
-
-        while True:
-            requesturl = self.make_requesturl()
-            new_html = HtmlCLip(requesturl)
-
-            self.print_info()
-
-            if self.page == 1:
-                new_html.threadsnumber = self.threads
-                new_html.firstpage = True
-
-            for item in new_html.str_contents():
-                self.write_html(item)
-            if new_html.isendpage():
-                break
-            self.page += 1
-
-    def write_html(self, content):
-        with open(self.filepath, 'a', encoding='utf8') as f:
-            f.write(content)
-
-    def make_requesturl(self):
-        return self.url + '?page=' + str(self.page)
-
-    def clean_url(self, url):
-        return url.split('?')[0]
-
-    def get_threads(self):
-        """return str threads"""
-        return str(self.url.split('/')[-1])
-
-    def print_info(self):
-        print('dealing with page', self.page)
-
-    def user_set_foldername(self):
-        name = input('name?\ndefault name is (%s) press Enter to pass\n' % self.threads)
-        return name if name else self.threads
-
-
-#####################################################3
-
-BASEDATA_DIR = mk_dir(os.getcwd(), 'data')
-patttern = re.compile(r'>>No\.(\d+)')
-connect = requests.session()
-downloaded_image = DownloadedImage()
+    if page.is_endpage():
+        return True
+    page.next()
 
 
 def main():
-    url = input('please input the url start with http://! \n')
-    mainthreads = MainThreads(url)
-    with mainthreads:
-        mainthreads.travelandwrite_html()
-        print('done!')
+    user_input = UserInput()
+    user_input.collect_input()
+    page = Page(user_input.url)
+
+    with open(user_input.filepath, 'w', encoding='utf8') as f:
+        page_go(page, f)
 
 if __name__ == '__main__':
     main()
