@@ -1,9 +1,12 @@
+from functools import wraps
+import re
 from urllib import parse as urllib_parse
 from bs4 import BeautifulSoup
 import os
 from zzlib.decorators import retry_connect, prepare_dir, loop
 from requests import get as _get
 from zzlib.utils import SafeString
+from contextlib import contextmanager
 import logging
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
@@ -14,7 +17,7 @@ __author__ = 'zz'
 
 ########### CONFIG ###############
 DATA_DIRNAME = 'data'
-
+BASE_SITE = 'http://h.acfun.tv/'
 #####################3
 
 
@@ -29,8 +32,14 @@ def get_beautifulsoup_content(url):
 
 @prepare_dir(DATA_DIRNAME)
 def mkdir_with_dirname(dirname):
-    os.mkdir(dirname)
+    if not os.path.exists(dirname):
+        os.mkdir(dirname)
 
+
+complete_links_pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
+def complete_links(s: str, pat=complete_links_pat):
+
+    return pat.sub(lambda x:BASE_SITE + x.group(1), s)
 
 
 
@@ -56,23 +65,44 @@ class Board:
 class Page:
     def __init__(self, url, pn=1):
         """bs is BeautifulSoup object
-
         pn: int
         """
         self._baseurl = url
-        self.bs = None
         self.pn = pn
+        self.bs = get_beautifulsoup_content(self.url)
 
     @property
     def url(self):
         return self._baseurl + '?page=' + str(self.pn)
 
     @property
+    def html_head_str(self):
+        return str(self.bs.head)
+
+    @property
+    def html_wrap_div_str(self):
+        ret = '<div class="h-threads-item uk-clearfix" data-threads-id="{data-threads-id}">'
+        return ret.format_map(self.bs.find('div', class_='h-threads-item uk-clearfix').attrs)
+
+
+    @property
+    def final_content_str(self):
+        """
+        单独让每一个board.run, 为后续多线程留出空间
+        返回整合的页面.
+        """
+        board_list = []
+        logging.debug('final_content_str')
+        for board in self._boards():
+            board.run()
+            board_list.append(str(board))
+
+        return ''.join(board_list)
+
     def _boards(self):
         """
         :return: a list of the instance of Board
         """
-        self.bs = get_beautifulsoup_content(self.url)
 
         if self.pn <= 1:
             yield Board(self.bs.find('div', class_='h-threads-item-main'))
@@ -82,18 +112,11 @@ class Page:
 
     def next(self):
         self.pn += 1
+        self.bs = get_beautifulsoup_content(self.url)
 
     def is_endpage(self):
         return False if self.bs.find('a', text='下一页') else True
 
-    @property
-    def finally_boards(self):
-        """
-        单独让每一个board.run, 为后续多线程留出空间
-        """
-        for board in self._boards:
-            board.run()
-            yield board
 
 
 class BaseDescriptor:
@@ -133,6 +156,12 @@ class PathDescriptor(BaseDescriptor):
 
 
 class UserInput:
+    """
+    img_dir 存放大图的目录地址,
+    thunm_dir 小兔的目录地址.
+    base_dir 是串的名字的地址.
+    filepath 是html文件的地址.
+    """
     url = UrlDescriptor('url')
     base_dir = PathDescriptor('base_dir')
     img_dir = PathDescriptor('img_dir')
@@ -164,17 +193,49 @@ class UserInput:
 
 
 @loop
-def page_go(page, file):
+def page_go(page: Page, file):
     """
     名字有点奇葩...我懂...我懂..
     好吧, 我只是单纯的想用loop 修饰器而已...
     """
-    for board in page.finally_boards:
-        file.write(str(board))
+    file.write(str(page.final_content_str))
 
     if page.is_endpage():
         return True
+
     page.next()
+
+
+@contextmanager
+def extrawork_page_go(page: Page, file):
+    """
+    添加<head> , 补足标签之类的.
+    """
+
+    # 添加head里的链接, 添加css的包裹div
+    pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
+    html_head = pat.sub(lambda x:BASE_SITE + x.group(1), page.html_head_str)
+
+    wrap_div = page.html_wrap_div_str
+    # FIXME: 这个部分应该再考虑, replyes的div应该在po的后面, 但是目前这样没有问题.
+    wrap_div_replys = '<div class="h-threads-item-replys">'
+    file.write(html_head + wrap_div + wrap_div_replys)
+    yield
+
+    # 两个wrap_div
+    file.write('</div></div>')
+
+
+
+
+def prepare_page_go(page: Page, file):
+    """
+    write hacfun html <head> content
+    """
+    pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
+    html_head = pat.sub(lambda x:BASE_SITE + x.group(1), page.html_head_str)
+    file.write(html_head)
+
 
 
 def main():
@@ -182,8 +243,10 @@ def main():
     user_input.collect_input()
     page = Page(user_input.url)
 
-    with open(user_input.filepath, 'w', encoding='utf8') as f:
-        page_go(page, f)
+    with open(user_input.filepath, 'w', encoding='utf8') as file:
+        with extrawork_page_go(page, file):
+            page_go(page, file)
+
 
 if __name__ == '__main__':
     main()
