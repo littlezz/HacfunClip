@@ -1,6 +1,8 @@
 from functools import wraps
 import re
+import threading
 from urllib import parse as urllib_parse
+import weakref
 from bs4 import BeautifulSoup
 import os
 from zzlib.decorators import retry_connect, prepare_dir, loop
@@ -17,7 +19,8 @@ __author__ = 'zz'
 
 ########### CONFIG ###############
 DATA_DIRNAME = 'data'
-BASE_SITE = 'http://h.acfun.tv/'
+BASE_SITE = 'http://h.acfun.tv'
+AJAX_HOST = 'http://h.acfun.tv/homepage/ref?tid='
 #####################3
 
 
@@ -42,10 +45,33 @@ def complete_links(s: str, pat=complete_links_pat):
     return pat.sub(lambda x:BASE_SITE + x.group(1), s)
 
 
+class AjaxContentManager:
+    """
+    缓存 reply ajax 的内容.
+    """
+    def __init__(self):
+        self._cache = weakref.WeakValueDictionary()
+        self._lock = threading.Lock()
+
+    def get(self, url):
+        """
+        返回的是BeautifulSoup instance
+        """
+        if url not in self._cache:
+            bs = BeautifulSoup(requests_get(url).content)
+            with self._lock:
+                self._cache[url] = bs
+
+            return bs
+        else:
+            return self._cache[url]
 
 
 class Board:
-
+    acmanager = AjaxContentManager()
+    enable_plugin = ['_plugin_complete_replyid','_plugin_reply_insert']
+    replyref_pat = re.compile(r'>>No\.(\d+)')
+    sema = threading.Semaphore(4)
 
     def __init__(self, board_bs: BeautifulSoup):
         self.bs = board_bs
@@ -53,12 +79,31 @@ class Board:
     def __str__(self):
         return str(self.bs)
 
+    def start(self, sema):
+        """
+        在线程池的控制下启动run
+        """
+        with sema:
+            self.run()
 
     def run(self):
-        pass
+
+        #run plugin
+        for plugin_name in self.enable_plugin:
+            getattr(self,plugin_name)()
+
+    def _plugin_complete_replyid(self):
+        link = self.bs.find('a', 'h-threads-info-id')
+        link['href'] = BASE_SITE + link['href']
 
     def _plugin_reply_insert(self):
-        pass
+        reply_content = self.bs.find('div', 'h-threads-content')
+        if self.replyref_pat.search(reply_content.text):
+            reply_num = self.replyref_pat.search(reply_content.text).group(1)
+            logging.debug('reply number: %s', reply_num)
+            ajax_board = Board(self.acmanager.get(AJAX_HOST + reply_num))
+            ajax_board.run()
+            reply_content.insert(0, ajax_board.bs)
 
 
 
@@ -83,7 +128,6 @@ class Page:
     def html_wrap_div_str(self):
         ret = '<div class="h-threads-item uk-clearfix" data-threads-id="{data-threads-id}">'
         return ret.format_map(self.bs.find('div', class_='h-threads-item uk-clearfix').attrs)
-
 
     @property
     def final_content_str(self):
@@ -123,9 +167,7 @@ class BaseDescriptor:
     def __init__(self, name):
         self.name = name
 
-    def __get__(self, instance, owner):
-        return instance.__dict__[self.name]
-
+    # no need to define __get__
     def __set__(self, instance, value):
         instance.__dict__[self.name] = value
 
@@ -191,7 +233,6 @@ class UserInput:
         logging.debug('img_dir: %s', self.img_dir)
 
 
-
 @loop
 def page_go(page: Page, file):
     """
@@ -226,16 +267,13 @@ def extrawork_page_go(page: Page, file):
     file.write('</div></div>')
 
 
-
-
 def prepare_page_go(page: Page, file):
     """
     write hacfun html <head> content
     """
     pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
-    html_head = pat.sub(lambda x:BASE_SITE + x.group(1), page.html_head_str)
+    html_head = pat.sub(lambda x: BASE_SITE + x.group(1), page.html_head_str)
     file.write(html_head)
-
 
 
 def main():
