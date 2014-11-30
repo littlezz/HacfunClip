@@ -16,7 +16,6 @@ __author__ = 'zz'
 
 # new version for new A island!
 
-
 ########### CONFIG ###############
 DATA_DIRNAME = 'data'
 BASE_SITE = 'http://h.acfun.tv'
@@ -41,8 +40,7 @@ def mkdir_with_dirname(dirname):
 
 complete_links_pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
 def complete_links(s: str, pat=complete_links_pat):
-
-    return pat.sub(lambda x:BASE_SITE + x.group(1), s)
+    return pat.sub(lambda x: BASE_SITE + x.group(1), s)
 
 
 class AjaxContentManager:
@@ -58,7 +56,7 @@ class AjaxContentManager:
         返回的是BeautifulSoup instance
         """
         if url not in self._cache:
-            bs = BeautifulSoup(requests_get(url).content)
+            bs = get_beautifulsoup_content(url)
             with self._lock:
                 self._cache[url] = bs
 
@@ -69,7 +67,7 @@ class AjaxContentManager:
 
 class Board:
     acmanager = AjaxContentManager()
-    enable_plugin = ['_plugin_complete_replyid','_plugin_reply_insert']
+    enable_plugin = ['_plugin_complete_replyid', '_plugin_reply_insert']
     replyref_pat = re.compile(r'>>No\.(\d+)')
     sema = threading.Semaphore(4)
 
@@ -106,7 +104,6 @@ class Board:
             reply_content.insert(0, ajax_board.bs)
 
 
-
 class Page:
     def __init__(self, url, pn=1):
         """bs is BeautifulSoup object
@@ -135,26 +132,24 @@ class Page:
         单独让每一个board.run, 为后续多线程留出空间
         返回整合的页面.
         """
-        board_list = []
-        logging.debug('final_content_str')
+        board_str_list = []
         for board in self._boards():
             board.run()
-            board_list.append(str(board))
+            board_str_list.append(str(board))
 
-        return ''.join(board_list)
+        return ''.join(board_str_list)
 
     def _boards(self):
         """
         :return: a list of the instance of Board
         """
-
-        if self.pn <= 1:
+        if self.pn == 1:
             yield Board(self.bs.find('div', class_='h-threads-item-main'))
-
         for reply in self.bs.find_all('div', class_='h-threads-item-reply'):
             yield Board(reply)
 
     def next(self):
+        """ 翻页, 获取内容"""
         self.pn += 1
         self.bs = get_beautifulsoup_content(self.url)
 
@@ -180,7 +175,6 @@ class UrlDescriptor(BaseDescriptor):
         else:
             # clean url
             value = value.split('?')[0]
-
             super().__set__(instance, value)
 
 
@@ -192,7 +186,6 @@ class PathDescriptor(BaseDescriptor):
         with plugin that mkdir.
         """
         super().__set__(instance, value)
-
         for plugin_func in self.plugings:
             plugin_func(value)
 
@@ -240,7 +233,6 @@ def page_go(page: Page, file):
     好吧, 我只是单纯的想用loop 修饰器而已...
     """
     file.write(str(page.final_content_str))
-
     if page.is_endpage():
         return True
 
@@ -258,6 +250,7 @@ def extrawork_page_go(page: Page, file):
     html_head = pat.sub(lambda x:BASE_SITE + x.group(1), page.html_head_str)
 
     wrap_div = page.html_wrap_div_str
+
     # FIXME: 这个部分应该再考虑, replyes的div应该在po的后面, 但是目前这样没有问题.
     wrap_div_replys = '<div class="h-threads-item-replys">'
     file.write(html_head + wrap_div + wrap_div_replys)
@@ -265,15 +258,6 @@ def extrawork_page_go(page: Page, file):
 
     # 两个wrap_div
     file.write('</div></div>')
-
-
-def prepare_page_go(page: Page, file):
-    """
-    write hacfun html <head> content
-    """
-    pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
-    html_head = pat.sub(lambda x: BASE_SITE + x.group(1), page.html_head_str)
-    file.write(html_head)
 
 
 def main():
