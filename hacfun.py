@@ -1,16 +1,17 @@
 from functools import wraps
+from queue import Queue
 import re
 import threading
 from urllib import parse as urllib_parse
 import weakref
 from bs4 import BeautifulSoup
 import os
-from zzlib.decorators import retry_connect, prepare_dir, loop
+from zzlib.decorators import retry_connect, prepare_dir, loop, semalock
 from requests import get as _get
 from zzlib.utils import SafeString
 from contextlib import contextmanager
 import logging
-logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(Thread)s %(message)s')
 
 __author__ = 'zz'
 
@@ -38,9 +39,34 @@ def mkdir_with_dirname(dirname):
         os.mkdir(dirname)
 
 
-complete_links_pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
-def complete_links(s: str, pat=complete_links_pat):
-    return pat.sub(lambda x: BASE_SITE + x.group(1), s)
+
+class AsyncImageDownload:
+    sentinel = object()
+    def __init__(self, que: Queue, threading_num=4):
+        self._q = que
+        self.threading_num = threading_num
+
+    def start(self):
+        for i in range(self.threading_num):
+            t = threading.Thread(target=self.process)
+            t.start()
+
+    @loop
+    def process(self):
+        img_url, img_path = self._q.get()
+        if img_url == self.sentinel:
+            self._q.put(img_url)
+            return True
+
+        if os.path.exists(img_path):
+            return False
+        else:
+            imgdata = requests_get(img_url).content
+            with open(img_path, 'wb')as file:
+                file.write(imgdata)
+
+    def stop(self):
+        self._q.put(self.sentinel)
 
 
 class AjaxContentManager:
@@ -49,7 +75,6 @@ class AjaxContentManager:
     """
     def __init__(self):
         self._cache = weakref.WeakValueDictionary()
-        self._lock = threading.Lock()
 
     def get(self, url):
         """
@@ -57,9 +82,6 @@ class AjaxContentManager:
         """
         if url not in self._cache:
             bs = get_beautifulsoup_content(url)
-            with self._lock:
-                self._cache[url] = bs
-
             return bs
         else:
             return self._cache[url]
@@ -69,20 +91,12 @@ class Board:
     acmanager = AjaxContentManager()
     enable_plugin = ['_plugin_complete_replyid', '_plugin_reply_insert']
     replyref_pat = re.compile(r'>>No\.(\d+)')
-    sema = threading.Semaphore(4)
 
     def __init__(self, board_bs: BeautifulSoup):
         self.bs = board_bs
 
     def __str__(self):
         return str(self.bs)
-
-    def start(self, sema):
-        """
-        在线程池的控制下启动run
-        """
-        with sema:
-            self.run()
 
     def run(self):
 
@@ -102,6 +116,10 @@ class Board:
             ajax_board = Board(self.acmanager.get(AJAX_HOST + reply_num))
             ajax_board.run()
             reply_content.insert(0, ajax_board.bs)
+
+    #TODO: write imgdownload plugin
+    def _plugin_img_download(self):
+        pass
 
 
 class Page:
@@ -155,7 +173,6 @@ class Page:
 
     def is_endpage(self):
         return False if self.bs.find('a', text='下一页') else True
-
 
 
 class BaseDescriptor:
@@ -265,10 +282,16 @@ def main():
     user_input.collect_input()
     page = Page(user_input.url)
 
+    # start image download threading!
+    img_q = Queue()
+    aid = AsyncImageDownload(img_q)
+    aid.start()
+
     with open(user_input.filepath, 'w', encoding='utf8') as file:
         with extrawork_page_go(page, file):
             page_go(page, file)
 
+    aid.stop()
 
 if __name__ == '__main__':
     main()
