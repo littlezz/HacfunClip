@@ -6,7 +6,7 @@ from urllib import parse as urllib_parse
 import weakref
 from bs4 import BeautifulSoup
 import os
-from zzlib.decorators import retry_connect, prepare_dir, loop, semalock
+from zzlib.decorators import retry_connect, prepare_dir, loop
 from requests import get as _get
 from zzlib.utils import SafeString
 from contextlib import contextmanager
@@ -42,17 +42,18 @@ def mkdir_with_dirname(dirname):
 
 class AsyncImageDownload:
     sentinel = object()
-    def __init__(self, que: Queue, threading_num=4):
-        self._q = que
+
+    def __init__(self, threading_num=4):
+        self._q = Queue()
         self.threading_num = threading_num
 
     def start(self):
         for i in range(self.threading_num):
-            t = threading.Thread(target=self.process)
+            t = threading.Thread(target=self._process)
             t.start()
 
     @loop
-    def process(self):
+    def _process(self):
         img_url, img_path = self._q.get()
         if img_url == self.sentinel:
             self._q.put(img_url)
@@ -64,6 +65,9 @@ class AsyncImageDownload:
             imgdata = requests_get(img_url).content
             with open(img_path, 'wb')as file:
                 file.write(imgdata)
+
+    def put_data(self, data):
+        self._q.put(data)
 
     def stop(self):
         self._q.put(self.sentinel)
@@ -89,6 +93,7 @@ class AjaxContentManager:
 
 class Board:
     acmanager = AjaxContentManager()
+    aidmanager = None
     enable_plugin = ['_plugin_complete_replyid', '_plugin_reply_insert']
     replyref_pat = re.compile(r'>>No\.(\d+)')
 
@@ -102,7 +107,12 @@ class Board:
 
         #run plugin
         for plugin_name in self.enable_plugin:
-            getattr(self,plugin_name)()
+            getattr(self, plugin_name)()
+
+    @classmethod
+    def set_aidmanager(cls, aid_object):
+        setattr(cls, 'aidmanager', aid_object)
+
 
     def _plugin_complete_replyid(self):
         link = self.bs.find('a', 'h-threads-info-id')
@@ -226,7 +236,6 @@ class UserInput:
         self.url = input('输入串的网址\n')
 
         default_dirname = self.url.split('/')[-1]
-
         dirname_ = input("输入自定义的名字(默认为'{}'), 直接回车跳过\n".format(default_dirname))
         dirname = SafeString().sanitized_dirname(dirname_) if dirname_ else default_dirname
 
@@ -264,7 +273,7 @@ def extrawork_page_go(page: Page, file):
 
     # 添加head里的链接, 添加css的包裹div
     pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
-    html_head = pat.sub(lambda x:BASE_SITE + x.group(1), page.html_head_str)
+    html_head = pat.sub(lambda x: BASE_SITE + x.group(1), page.html_head_str)
 
     wrap_div = page.html_wrap_div_str
 
@@ -283,8 +292,8 @@ def main():
     page = Page(user_input.url)
 
     # start image download threading!
-    img_q = Queue()
-    aid = AsyncImageDownload(img_q)
+    aid = AsyncImageDownload()
+    Board.set_aidmanager(aid)
     aid.start()
 
     with open(user_input.filepath, 'w', encoding='utf8') as file:
