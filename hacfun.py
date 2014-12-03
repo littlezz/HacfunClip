@@ -1,4 +1,3 @@
-from functools import wraps
 from queue import Queue
 import re
 import threading
@@ -11,7 +10,7 @@ from requests import get as _get
 from zzlib.utils import SafeString
 from contextlib import contextmanager
 import logging
-logging.basicConfig(level=logging.DEBUG, format='%(Thread)s %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(threadName)s %(message)s')
 
 __author__ = 'zz'
 
@@ -54,10 +53,12 @@ class AsyncImageDownload:
 
     @loop
     def _process(self):
-        img_url, img_path = self._q.get()
-        if img_url == self.sentinel:
-            self._q.put(img_url)
+        #exit
+        data = self._q.get()
+        if data == self.sentinel:
+            self._q.put(data)
             return True
+        img_url, img_path = data
 
         if os.path.exists(img_path):
             return False
@@ -67,10 +68,13 @@ class AsyncImageDownload:
                 file.write(imgdata)
 
     def put_data(self, data):
+        """
+        data: (img_url, img_path)
+        """
         self._q.put(data)
 
     def stop(self):
-        self._q.put(self.sentinel)
+        self.put_data(self.sentinel)
 
 
 class AjaxContentManager:
@@ -112,7 +116,6 @@ class Board:
     @classmethod
     def set_aidmanager(cls, aid_object):
         setattr(cls, 'aidmanager', aid_object)
-
 
     def _plugin_complete_replyid(self):
         link = self.bs.find('a', 'h-threads-info-id')
