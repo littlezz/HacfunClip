@@ -1,3 +1,4 @@
+from functools import partial
 from queue import Queue
 import re
 import threading
@@ -20,7 +21,7 @@ __author__ = 'zz'
 DATA_DIRNAME = 'data'
 BASE_SITE = 'http://h.acfun.tv'
 AJAX_HOST = 'http://h.acfun.tv/homepage/ref?tid='
-#####################3
+#################################
 
 
 @retry_connect(retry_times=3, timeout=2)
@@ -45,6 +46,8 @@ class AsyncImageDownload:
     def __init__(self, threading_num=4):
         self._q = Queue()
         self.threading_num = threading_num
+        self._cache =  set()
+        self._lock = threading.Lock()
 
     def start(self):
         for i in range(self.threading_num):
@@ -53,28 +56,33 @@ class AsyncImageDownload:
 
     @loop
     def _process(self):
-        #exit
-        data = self._q.get()
-        if data == self.sentinel:
-            self._q.put(data)
-            return True
-        img_url, img_path = data
+        img_url, img_path = self._q.get()
 
-        if os.path.exists(img_path):
+        # exit
+        if img_url == self.sentinel:
+            self._q.put((self.sentinel,) * 2)
+            return True
+
+        if os.path.exists(img_path) or img_url in self._cache:
+            logging.debug('pass download %s', img_path)
             return False
         else:
+            logging.debug('Star Download %s', img_url)
+            with self._lock:
+                self._cache.add(img_url)
+
             imgdata = requests_get(img_url).content
             with open(img_path, 'wb')as file:
                 file.write(imgdata)
 
-    def put_data(self, data):
+    def put_data(self, img_url_img_path: tuple):
         """
         data: (img_url, img_path)
         """
-        self._q.put(data)
+        self._q.put(img_url_img_path)
 
     def stop(self):
-        self.put_data(self.sentinel)
+        self.put_data((self.sentinel,) * 2)
 
 
 class AjaxContentManager:
@@ -97,8 +105,13 @@ class AjaxContentManager:
 
 class Board:
     acmanager = AjaxContentManager()
+
+    # AsyncImageDownload
     aidmanager = None
-    enable_plugin = ['_plugin_complete_replyid', '_plugin_reply_insert']
+
+    img_dir = None
+    thumb_dir = None
+    enable_plugin = ['_plugin_img_download', '_plugin_complete_replyid', '_plugin_reply_insert']
     replyref_pat = re.compile(r'>>No\.(\d+)')
 
     def __init__(self, board_bs: BeautifulSoup):
@@ -114,8 +127,13 @@ class Board:
             getattr(self, plugin_name)()
 
     @classmethod
-    def set_aidmanager(cls, aid_object):
+    def set_aidmanager(cls, aid_object: AsyncImageDownload):
         setattr(cls, 'aidmanager', aid_object)
+
+    @classmethod
+    def set_img_download_info(cls, img_dir, thumb_dir):
+        cls.img_dir = img_dir
+        cls.thumb_dir = thumb_dir
 
     def _plugin_complete_replyid(self):
         link = self.bs.find('a', 'h-threads-info-id')
@@ -125,14 +143,54 @@ class Board:
         reply_content = self.bs.find('div', 'h-threads-content')
         if self.replyref_pat.search(reply_content.text):
             reply_num = self.replyref_pat.search(reply_content.text).group(1)
-            logging.debug('reply number: %s', reply_num)
             ajax_board = Board(self.acmanager.get(AJAX_HOST + reply_num))
             ajax_board.run()
             reply_content.insert(0, ajax_board.bs)
 
-    #TODO: write imgdownload plugin
+    # FIXME: 是不是可以采用注入参数的方法?
     def _plugin_img_download(self):
-        pass
+
+        def _package_work(filepath_prefix, url, aidmanager):
+            """返回修改后的图片文件地址, 向异步图片下载推送相应的信息"""
+
+            filename = url.split('/')[-1]
+            save_path = os.path.join(filepath_prefix, filename)
+            aidmanager.put_data((url, save_path))
+
+            logging.debug('save path: %s', save_path)
+
+            # 需要替换的html 相对地址
+            new_path = os.path.join(os.path.basename(filepath_prefix), filename)
+            logging.debug('new path %s', new_path)
+            return new_path
+
+        # 注入参数
+        _package_work = partial(_package_work, aidmanager=self.aidmanager)
+
+
+        if self.aidmanager is None:
+            raise TypeError('No aidmanager')
+
+        imgbox = self.bs.find('div', class_='h-threads-img-box') or None
+
+        if imgbox:
+            # <img> --> thumb
+            htmltag_img = imgbox.find('img')
+            htmltag_img['src'] = _package_work(self.thumb_dir, htmltag_img['src'])
+
+            # <a> --> img
+
+            # uk tool <a>
+            htmltag_a = imgbox.find('a', class_='h-threads-img-tool-btn')
+            htmltag_a['href'] = _package_work(self.img_dir, htmltag_a['href'])
+            logging.debug('new uk tool link a %s', htmltag_a['href'])
+
+            #link <a>
+            htmltag_a = imgbox.find('a', class_='h-threads-img-a')
+            htmltag_a['href'] = _package_work(self.img_dir, htmltag_a['href'])
+
+
+
 
 
 class Page:
@@ -292,6 +350,10 @@ def extrawork_page_go(page: Page, file):
 def main():
     user_input = UserInput()
     user_input.collect_input()
+
+    #set up plugin img dir
+    Board.set_img_download_info(user_input.img_dir, user_input.thumb_dir)
+
     page = Page(user_input.url)
 
     # start image download threading!
