@@ -93,12 +93,12 @@ class AjaxContentManager:
 
     def get(self, url):
         """
-        返回的是BeautifulSoup instance
+        :return: response from requests
         """
         if url not in self._cache:
-            bs = get_beautifulsoup_content(url)
-            reply_bs = bs.find('div', class_='h-threads-item-reply-main')
-            return reply_bs
+            ret = requests_get(url)
+            self._cache[url] = ret
+            return ret
         else:
             return self._cache[url]
 
@@ -143,9 +143,12 @@ class Board:
         reply_content = self.bs.find('div', 'h-threads-content')
         if self.replyref_pat.search(reply_content.text):
             reply_num = self.replyref_pat.search(reply_content.text).group(1)
-            ajax_board = Board(self.acmanager.get(AJAX_HOST + reply_num))
-            ajax_board.run()
-            reply_content.insert(0, ajax_board.bs)
+            ajax_resp = self.acmanager.get(AJAX_HOST + reply_num)
+
+            if ajax_resp.ok:
+                ajax_board = Board(BeautifulSoup(ajax_resp.content).find('div', class_='h-threads-item-reply-main'))
+                ajax_board.run()
+                reply_content.insert(0, ajax_board.bs)
 
     # FIXME: 是不是可以采用注入参数的方法?
     def _plugin_img_download(self):
