@@ -39,14 +39,13 @@ def mkdir_with_dirname(dirname):
         os.mkdir(dirname)
 
 
-
 class AsyncImageDownload:
     sentinel = object()
 
     def __init__(self, threading_num=4):
         self._q = Queue()
         self.threading_num = threading_num
-        self._cache =  set()
+        self._cache = set()
         self._lock = threading.Lock()
 
     def start(self):
@@ -98,7 +97,8 @@ class AjaxContentManager:
         """
         if url not in self._cache:
             bs = get_beautifulsoup_content(url)
-            return bs
+            reply_bs = bs.find('div', class_='h-threads-item-reply-main')
+            return reply_bs
         else:
             return self._cache[url]
 
@@ -157,16 +157,13 @@ class Board:
             save_path = os.path.join(filepath_prefix, filename)
             aidmanager.put_data((url, save_path))
 
-            logging.debug('save path: %s', save_path)
 
             # 需要替换的html 相对地址
             new_path = os.path.join(os.path.basename(filepath_prefix), filename)
-            logging.debug('new path %s', new_path)
             return new_path
 
         # 注入参数
         _package_work = partial(_package_work, aidmanager=self.aidmanager)
-
 
         if self.aidmanager is None:
             raise TypeError('No aidmanager')
@@ -183,14 +180,10 @@ class Board:
             # uk tool <a>
             htmltag_a = imgbox.find('a', class_='h-threads-img-tool-btn')
             htmltag_a['href'] = _package_work(self.img_dir, htmltag_a['href'])
-            logging.debug('new uk tool link a %s', htmltag_a['href'])
 
             #link <a>
             htmltag_a = imgbox.find('a', class_='h-threads-img-a')
             htmltag_a['href'] = _package_work(self.img_dir, htmltag_a['href'])
-
-
-
 
 
 class Page:
@@ -241,6 +234,7 @@ class Page:
         """ 翻页, 获取内容"""
         self.pn += 1
         self.bs = get_beautifulsoup_content(self.url)
+        logging.debug('next page %s', str(self.pn))
 
     def is_endpage(self):
         return False if self.bs.find('a', text='下一页') else True
@@ -267,15 +261,13 @@ class UrlDescriptor(BaseDescriptor):
 
 
 class PathDescriptor(BaseDescriptor):
-    plugings = [mkdir_with_dirname, ]
-
     def __set__(self, instance, value):
         """
         with plugin that mkdir.
         """
         super().__set__(instance, value)
-        for plugin_func in self.plugings:
-            plugin_func(value)
+
+        mkdir_with_dirname(value)
 
 
 class UserInput:
@@ -319,7 +311,7 @@ def page_go(page: Page, file):
     名字有点奇葩...我懂...我懂..
     好吧, 我只是单纯的想用loop 修饰器而已...
     """
-    file.write(str(page.final_content_str))
+    file.write(page.final_content_str)
     if page.is_endpage():
         return True
 
