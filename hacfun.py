@@ -111,7 +111,15 @@ class Board:
 
     img_dir = None
     thumb_dir = None
-    enable_plugin = ['_plugin_img_download', '_plugin_complete_replyid', '_plugin_reply_insert']
+
+    enable_plugin = [
+                     '_plugin_img_download',
+                     '_plugin_complete_replyid',
+                     '_plugin_del_useless_html',
+                     '_plugin_reply_insert'
+    ]
+
+
     replyref_pat = re.compile(r'>>No\.(\d+)')
 
     def __init__(self, board_bs: BeautifulSoup):
@@ -160,7 +168,6 @@ class Board:
             save_path = os.path.join(filepath_prefix, filename)
             aidmanager.put_data((url, save_path))
 
-
             # 需要替换的html 相对地址
             new_path = os.path.join(os.path.basename(filepath_prefix), filename)
             return new_path
@@ -187,6 +194,12 @@ class Board:
             #link <a>
             htmltag_a = imgbox.find('a', class_='h-threads-img-a')
             htmltag_a['href'] = _package_work(self.img_dir, htmltag_a['href'])
+
+    def _plugin_del_useless_html(self):
+        """
+        删除管理者才能看到的html文本内容.
+        """
+        self.bs.find('span', class_='h-admin-tool').extract()
 
 
 class Page:
