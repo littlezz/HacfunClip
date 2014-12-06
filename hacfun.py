@@ -35,6 +35,7 @@ def get_beautifulsoup_content(url):
 
 @prepare_dir(DATA_DIRNAME)
 def mkdir_with_dirname(dirname):
+    """在确保DATA_DIRNAME的情况下创建dirname"""
     if not os.path.exists(dirname):
         os.mkdir(dirname)
 
@@ -109,16 +110,16 @@ class Board:
     # AsyncImageDownload
     aidmanager = None
 
+    # 会在主函数中设置.
     img_dir = None
     thumb_dir = None
 
     enable_plugin = [
-                     '_plugin_img_download',
-                     '_plugin_complete_replyid',
-                     '_plugin_del_useless_html',
-                     '_plugin_reply_insert'
+        '_plugin_img_download',
+        '_plugin_complete_replyid',
+        '_plugin_del_useless_html',
+        '_plugin_reply_insert',
     ]
-
 
     replyref_pat = re.compile(r'>>No\.(\d+)')
 
@@ -129,7 +130,6 @@ class Board:
         return str(self.bs)
 
     def run(self):
-
         #run plugin
         for plugin_name in self.enable_plugin:
             getattr(self, plugin_name)()
@@ -140,6 +140,8 @@ class Board:
 
     @classmethod
     def set_img_download_info(cls, img_dir, thumb_dir):
+        """设置 图片下载需要的两个文件夹地址"""
+
         cls.img_dir = img_dir
         cls.thumb_dir = thumb_dir
 
@@ -151,6 +153,8 @@ class Board:
         reply_content = self.bs.find('div', 'h-threads-content')
         if self.replyref_pat.search(reply_content.text):
             reply_num = self.replyref_pat.search(reply_content.text).group(1)
+
+            # 返回响应的对象 Response
             ajax_resp = self.acmanager.get(AJAX_HOST + reply_num)
 
             if ajax_resp.ok:
@@ -186,7 +190,6 @@ class Board:
             htmltag_img['src'] = _package_work(self.thumb_dir, htmltag_img['src'])
 
             # <a> --> img
-
             # uk tool <a>
             htmltag_a = imgbox.find('a', class_='h-threads-img-tool-btn')
             htmltag_a['href'] = _package_work(self.img_dir, htmltag_a['href'])
@@ -203,11 +206,11 @@ class Board:
 
 
 class Page:
-    def __init__(self, url, pn=1):
+    def __init__(self, baseurl, pn=1):
         """bs is BeautifulSoup object
         pn: int
         """
-        self._baseurl = url
+        self._baseurl = baseurl
         self.pn = pn
         self.bs = get_beautifulsoup_content(self.url)
 
@@ -221,6 +224,7 @@ class Page:
 
     @property
     def html_wrap_div_str(self):
+        # 返回包裹的html
         ret = '<div class="h-threads-item uk-clearfix" data-threads-id="{data-threads-id}">'
         return ret.format_map(self.bs.find('div', class_='h-threads-item uk-clearfix').attrs)
 
@@ -289,7 +293,7 @@ class PathDescriptor(BaseDescriptor):
 class UserInput:
     """
     img_dir 存放大图的目录地址,
-    thunm_dir 小兔的目录地址.
+    thunm_dir 小图的目录地址.
     base_dir 是串的名字的地址.
     filepath 是html文件的地址.
     """
@@ -337,7 +341,7 @@ def page_go(page: Page, file):
 @contextmanager
 def extrawork_page_go(page: Page, file):
     """
-    添加<head> , 补足标签之类的.
+    添加<head>连接到A岛的css , 补足标签欠缺的包裹的div
     """
 
     # 添加head里的链接, 添加css的包裹div
