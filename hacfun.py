@@ -231,15 +231,16 @@ class Page:
     @property
     def final_content_str(self):
         """
-        单独让每一个board.run, 为后续多线程留出空间
-        返回整合的页面.
+        返回处理后整合的页面.
         """
-        board_str_list = []
-        for board in self._boards():
-            board.run()
-            board_str_list.append(str(board))
 
-        return ''.join(board_str_list)
+        # 调用.run()
+        def board_run(board):
+            """单独让每一个board.run"""
+            board.run()
+            return board
+
+        return ''.join(str(board_run(board)) for board in self._boards())
 
     def _boards(self):
         """
