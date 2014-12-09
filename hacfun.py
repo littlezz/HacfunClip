@@ -158,7 +158,12 @@ class Board:
             ajax_resp = self.acmanager.get(AJAX_HOST + reply_num)
 
             if ajax_resp.ok:
-                ajax_board = Board(BeautifulSoup(ajax_resp.content).find('div', class_='h-threads-item-reply-main'))
+
+                # 增加id, 让回复带上边框
+                ajax_content = BeautifulSoup(ajax_resp.content).find('div', class_='h-threads-item-reply-main')
+                ajax_content['id'] = 'replyembedded'
+
+                ajax_board = Board(ajax_content)
                 ajax_board.run()
                 reply_content.insert(0, ajax_board.bs)
 
@@ -344,6 +349,14 @@ def extrawork_page_go(page: Page, file):
     """
     添加<head>连接到A岛的css , 补足标签欠缺的包裹的div
     """
+
+    # 在头信息中加入回复的边框样式, 直接修改了bs内容, 和后面的添加头没有冲突
+
+    css_content = """#replyembedded{border: 2px solid;}"""
+
+    style_tag = BeautifulSoup().new_tag('style')
+    style_tag.string = css_content
+    page.bs.head.append(style_tag)
 
     # 添加head里的链接, 添加css的包裹div
     pat = re.compile(r'(?<==\")(/.*?)(?=\")', flags=re.DOTALL)
